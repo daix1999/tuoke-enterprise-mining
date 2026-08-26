@@ -3,7 +3,7 @@ name: tuoke-enterprise-mining
 slug: tuoke-enterprise-mining
 displayName: 拓客企业挖掘
 description: 通用 To B 拓客工具——通过关键词(经营范围)搜索去重，输出企业名单及联系方式；也支持按公司名直接搜索（文字单家/批量输入或喂表格名单），查完整电话邮箱。按用户身份(卖什么)+目标客户类型(卖给谁)匹配行业关键词，随机组合批量挖掘渠道商/集成商，自动补全电话邮箱。支持用户自主设定条件 + AI 自适应丰富需求，预留业务穿透等拓展能力。免费、无需 API Key。
-version: 1.1.1
+version: 1.1.2
 license: MIT
 ---
 

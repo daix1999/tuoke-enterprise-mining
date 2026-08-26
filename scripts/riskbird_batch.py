@@ -30,8 +30,13 @@ Excel 多表处理：逐个工作表自动识别“公司名”列（按含 公�
 输出格式（--format，默认 excel）：
   · excel → 仅输出表格 .xlsx（默认）
   · json  → 仅输出结构化 JSON（列表，含全部字段，便于二次处理/入库）
-  · both  → 两者都输出
-  注：无论选哪种，都会额外生成 <基名>_state.json 作为断点续跑内部状态文件。
+  · json5 → 输出 .json5（JSON5 超集：支持注释/尾逗号/单引号，可手工编辑，读取兼容）
+  · jsonc → 输出 .jsonc（JSON with Comments：仅比标准 JSON 多注释，VS Code 生态原生兼容）
+  · both  → Excel + JSON 都输出
+  注：① 无论选哪种，都会额外生成 <基名>_state.json 作为断点续跑内部状态文件；
+      ② json5 / jsonc 输出文件为标准 JSON 文本（合法 JSON5/JSONC），允许你事后手工加注释/改语法；
+      ③ 读取一律用 json5 解析器（兼容 标准JSON/JSONC/JSON5 三种），手改过带注释的文件也能续跑；
+      ④ json5 / jsonc 格式需要 Python 库：pip install json5（其余格式不需要）。
 
 单家文字输入 → 仅在对话流打印结果、不落表；加 --out 可指定落盘（同样受 --format 控制）。
 
@@ -52,6 +57,15 @@ import re
 import urllib.parse
 import sys
 import datetime
+
+try:
+    import json5 as _json5
+    HAS_JSON5 = True
+except ImportError:
+    HAS_JSON5 = False
+
+# 输出格式 → 数据文件扩展名
+EXT_MAP = {"json": ".json", "json5": ".json5", "jsonc": ".jsonc", "excel": ".xlsx", "both": ".json"}
 
 DEBUG = True
 
@@ -245,9 +259,8 @@ def _pick_company_col(rows):
 
 def read_companies(path):
     ext = os.path.splitext(path)[1].lower()
-    if ext == ".json":
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    if ext in (".json", ".json5", ".jsonc"):
+        data = load_json_any(path)
         if isinstance(data, list):
             return [str(x).strip() for x in data if str(x).strip()]
         return [str(v).strip() for v in data.values() if str(v).strip()]
@@ -310,6 +323,18 @@ def write_excel(results, path):
     wb.save(path)
 
 
+def load_json_any(path):
+    """读取 JSON / JSONC / JSON5 数据文件（json5 库优先，兼容注释；失败降级标准 json）。"""
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    if HAS_JSON5:
+        try:
+            return _json5.loads(text)
+        except Exception:
+            pass
+    return json.loads(text)
+
+
 def save_results(results, path):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
@@ -360,9 +385,9 @@ def _run_single(args, company):
         if fmt in ("excel", "both"):
             write_excel([info], base + ".xlsx")
             print(f"\nExcel: {base}.xlsx")
-        if fmt in ("json", "both"):
-            save_results([info], base + ".json")
-            print(f"JSON : {base}.json")
+        if fmt in ("json", "json5", "jsonc", "both"):
+            save_results([info], base + EXT_MAP[fmt])
+            print(f"{fmt.upper()} : {base}{EXT_MAP[fmt]}")
 
 
 def main():
@@ -377,8 +402,10 @@ def main():
     ap.add_argument("--names", "-N", action="append", metavar="公司名", help="同 --name，多个公司名可重复传入")
     ap.add_argument("--out", "-o", default=None, help="输出路径（Excel/JSON，支持占位符，如 结果_[YYYY-MM-DD].xlsx）")
     ap.add_argument("--json-out", default=None, help="（兼容）指定 JSON 报告路径，覆盖默认；仅在 --format 含 json 时生效")
-    ap.add_argument("--format", "-F", default="excel", choices=["excel", "json", "both"],
-                    help="输出格式：excel(默认)=仅表格 / json=仅结构化JSON / both=两者都出")
+    ap.add_argument("--format", "-F", default="excel",
+                    choices=["excel", "json", "json5", "jsonc", "both"],
+                    help="输出格式：excel(默认)=仅表格 / json=标准JSON / json5=JSON5(可注释,需json5库) / "
+                         "jsonc=JSON with Comments(可注释,需json5库) / both=Excel+JSON")
     ap.add_argument("--name-format", "-f", default=None,
                     help="自定义输出基名模板（不含扩展名），支持占位符："
                          "[YYYY-MM-DD][YYYYMMDD][YYMMDD][YYYY][MM][DD][HHMMSS][TS][NAME][COUNT]")
@@ -456,7 +483,6 @@ def main():
     # 2) 路径：state 为断点续跑内部文件（始终保留）；report 按 --format 落盘
     state_file = base + "_state.json"
     report_xlsx = base + ".xlsx"
-    report_json = args.json_out or (base + ".json")
 
     print("=" * 60)
     print(f"风鸟查询 | 共 {len(names)} 家企业 | 格式 {args.format} | 基名 {base}")
@@ -465,8 +491,7 @@ def main():
     results = []
     if os.path.exists(state_file):
         try:
-            with open(state_file, "r", encoding="utf-8") as f:
-                results = json.load(f)
+            results = load_json_any(state_file)
             print(f"📂 已有记录: {len(results)} 条")
         except Exception:
             pass
@@ -507,9 +532,10 @@ def main():
     if fmt in ("excel", "both"):
         write_excel(results, report_xlsx)
         print(f"Excel: {report_xlsx}")
-    if fmt in ("json", "both"):
+    if fmt in ("json", "json5", "jsonc", "both"):
+        report_json = args.json_out or (base + EXT_MAP[fmt])
         save_results(results, report_json)
-        print(f"JSON : {report_json}")
+        print(f"{fmt.upper()} : {report_json}")
     # 内部断点续跑状态始终写入
     save_results(results, state_file)
     print(f"状态 : {state_file}（断点续跑用）")

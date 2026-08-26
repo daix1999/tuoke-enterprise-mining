@@ -2,8 +2,8 @@
 name: tuoke-enterprise-mining
 slug: tuoke-enterprise-mining
 displayName: 拓客企业挖掘
-description: 通用 To B 拓客工具——通过关键词(经营范围)搜索去重，输出企业名单及联系方式。按用户身份(卖什么)+目标客户类型(卖给谁)匹配行业关键词，随机组合批量挖掘渠道商/集成商，自动补全电话邮箱。支持用户自主设定条件 + AI 自适应丰富需求，预留业务穿透等拓展能力。免费、无需 API Key。
-version: 1.0.0
+description: 通用 To B 拓客工具——通过关键词(经营范围)搜索去重，输出企业名单及联系方式；也支持按公司名直接搜索（文字单家/批量输入或喂表格名单），查完整电话邮箱。按用户身份(卖什么)+目标客户类型(卖给谁)匹配行业关键词，随机组合批量挖掘渠道商/集成商，自动补全电话邮箱。支持用户自主设定条件 + AI 自适应丰富需求，预留业务穿透等拓展能力。免费、无需 API Key。
+version: 1.1.0
 license: MIT
 ---
 
@@ -22,6 +22,7 @@ license: MIT
 5. **用户自主设定条件**：支持直接指定地区/注册资本/成立年限/联系方式/有无中标专利等
 6. **AI 自适应丰富**：用户给模糊需求（"找卖电脑的小公司"），AI 自动补全中小型/存续/IT行业等条件
 7. **限流保护**：检测风鸟 flagLimit 信号，额度用尽自动提示退出，不空跑
+8. **按名搜索指定公司**：直接文字输入公司名（单家或批量），或喂 Excel/CSV/JSON/TXT 名单，逐家查完整电话邮箱/法人/地址/注册资本——无需先跑关键词挖掘
 
 ## 快速开始（一键跑完整流程）
 
@@ -39,13 +40,54 @@ python scripts/run_full.py \
 
 不指定 identity/customer-type/regcap 时，自动随机组合。
 
+## 搜索指定公司信息（按名查 / 批量查）
+
+两种用法：①**直接文字输入公司名**（单家或批量，无需准备文件）；②**喂表格/文本名单**（Excel/CSV/JSON/TXT）批量查。两种都逐家在风鸟查公司页，提取完整电话、邮箱、法人、地址、注册资本等。
+
+### 用法一：直接文字输入公司名
+
+```bash
+# 单家搜索
+python scripts/riskbird_batch.py --name "北京博维伟业有限公司"
+
+# 批量搜索（可重复 --name，或等价用 --names）
+python scripts/riskbird_batch.py --name "A公司" --name "B公司" --name "C公司"
+python scripts/riskbird_batch.py --names "A公司" --names "B公司"
+
+# 指定输出文件
+python scripts/riskbird_batch.py --name "A公司" --out 结果.xlsx
+```
+
+### 用法二：喂名单文件（表格/文本批量查）
+
+```bash
+# Excel / CSV / JSON（自动识别表头“企业名/公司名/名称”列）
+python scripts/riskbird_batch.py 名单.xlsx
+python scripts/riskbird_batch.py 名单.csv
+python scripts/riskbird_batch.py 名单.json
+
+# TXT：每行一个公司名
+python scripts/riskbird_batch.py 名单.txt
+
+# 自定义输出 + 仅抽取校验（不查风鸟）
+python scripts/riskbird_batch.py 名单.xlsx --out 结果.xlsx
+python scripts/riskbird_batch.py 名单.xlsx --dry
+```
+
+### 说明
+
+- **输入**：`.xlsx` / `.csv`（UTF-8 或 GBK 自动探测）/ `.json`（字符串数组）/ `.txt`（每行一个公司名）。Excel/CSV 会自动识别“企业名/公司名/名称/company”等表头，取对应列；多工作表跨表按公司名去重；无表头时取第一列。
+- **输出**：默认生成 `名单_联系方式.xlsx`（字段：序号|企业名|注册地点|法人|电话|邮箱|规模|注册资本|经营范围）+ `名单_联系方式.json`（含原始明细与错误，便于断点续跑）；文字直输时默认输出 `搜索结果_联系方式.xlsx/json`。
+- **断点续跑**：同名 JSON 已存在的记录会跳过，只查未完成的，失败后可重跑不重复消耗额度。
+- 每 10 家打印一次进度；命中额度上限/需登录自动停止并提示。
+
 ## 脚本清单
 
 | 脚本 | 作用 |
 |---|---|
 | `run_full.py` | **一键入口**：搜→补电话→写回→分表 |
 | `riskbird_random_mining.py` | 核心引擎：combo(随机组合)/mine(搜索入库)/export(分表)/stats(统计) |
-| `riskbird_batch.py` | 补电话：给定企业名单，逐家查完整电话邮箱 |
+| `riskbird_batch.py` | 按名搜索：给定公司名(文件/文字直输)或名单，逐家查完整电话邮箱/法人/地址/注册资本 |
 | `industry_identities.json` | 身份×客户类型→关键词配置（可自行增删行业） |
 
 ## 关键参数（mine / run_full 通用）

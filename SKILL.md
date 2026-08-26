@@ -3,7 +3,7 @@ name: tuoke-enterprise-mining
 slug: tuoke-enterprise-mining
 displayName: 拓客企业挖掘
 description: 通用 To B 拓客工具——通过关键词(经营范围)搜索去重，输出企业名单及联系方式；也支持按公司名直接搜索（文字单家/批量输入或喂表格名单），查完整电话邮箱。按用户身份(卖什么)+目标客户类型(卖给谁)匹配行业关键词，随机组合批量挖掘渠道商/集成商，自动补全电话邮箱。支持用户自主设定条件 + AI 自适应丰富需求，预留业务穿透等拓展能力。免费、无需 API Key。
-version: 1.1.2
+version: 1.1.3
 license: MIT
 ---
 
@@ -56,6 +56,14 @@ python scripts/riskbird_batch.py --names "A公司" --names "B公司"
 
 # 指定输出文件
 python scripts/riskbird_batch.py --name "A公司" --out 结果.xlsx
+
+# 输出格式：excel(默认) / json / both
+python scripts/riskbird_batch.py --name "A公司" --name "B公司" --format json
+python scripts/riskbird_batch.py 名单.xlsx --format both
+
+# 自定义命名（占位符自动替换）
+python scripts/riskbird_batch.py 名单.xlsx --name-format "渠道线索_[YYYY-MM-DD]"
+python scripts/riskbird_batch.py 名单.xlsx --out "结果_[YYMMDD].xlsx"
 ```
 
 ### 用法二：喂名单文件（表格/文本批量查）
@@ -77,8 +85,12 @@ python scripts/riskbird_batch.py 名单.xlsx --dry
 ### 说明
 
 - **输入**：`.xlsx` / `.csv`（UTF-8 或 GBK 自动探测）/ `.json`（字符串数组）/ `.txt`（每行一个公司名）。Excel/CSV 会自动识别“企业名/公司名/名称/company”等表头，取对应列；多工作表跨表按公司名去重；无表头时取第一列。
-- **输出**：默认生成 `名单_联系方式.xlsx`（字段：序号|企业名|注册地点|法人|电话|邮箱|规模|注册资本|经营范围）+ `名单_联系方式.json`（含原始明细与错误，便于断点续跑）；文字直输时默认输出 `搜索结果_联系方式.xlsx/json`。
-- **断点续跑**：同名 JSON 已存在的记录会跳过，只查未完成的，失败后可重跑不重复消耗额度。
+- **输出格式（`--format`）**：`excel`（默认，仅表格）/ `json`（仅结构化 JSON，列表含全部字段，便于二次处理、入库）/ `both`（两者都出）。无论选哪种，都会额外生成 `<基名>_state.json` 作为断点续跑内部状态文件。
+- **默认命名**：文件输入 → `名单_联系方式.xlsx`(+`_state.json`)；文字直输 → `搜索结果_联系方式.xlsx`(+`_state.json`)。
+- **自定义命名**：`--name-format "<模板>"` 或 `--out "<路径>"` 均可，支持占位符自动替换：
+  `[YYYY-MM-DD]` `[YYYYMMDD]` `[YYMMDD]` `[YYYY]` `[MM]` `[DD]` `[HHMMSS]` `[TS]` `[NAME]` `[COUNT]`
+  （`[NAME]`=来源文件名/“搜索结果”，`[COUNT]`=企业数量，其余为日期时间片段）。示例：`--name-format "渠道线索_[YYYY-MM-DD]_[COUNT]"` → `渠道线索_2026-08-26_50.xlsx`。
+- **断点续跑**：同名 `_state.json` 已存在的记录会跳过，只查未完成的，失败后可重跑不重复消耗额度。
 - 每 10 家打印一次进度；命中额度上限/需登录自动停止并提示。
 
 ## 脚本清单

@@ -20,14 +20,26 @@
     python riskbird_batch.py --name "北京博维伟业有限公司"                   # 单家搜索（对话流告知）
     python riskbird_batch.py --name "A公司" --name "B公司" --name "C公司"   # 批量搜索（输出表格）
     python riskbird_batch.py --names "A公司" --names "B公司"                # 同上，等价写法
+    python riskbird_batch.py --name "A公司" --name "B公司" --format json   # 批量输出结构化 JSON
+    python riskbird_batch.py 名单.xlsx --name-format "渠道线索_[YYYY-MM-DD]"  # 自定义命名（含日期）
+    python riskbird_batch.py 名单.xlsx --out "结果_[YYMMDD].xlsx"           # --out 同样支持占位符
 
 Excel 多表处理：逐个工作表自动识别“公司名”列（按含 公司/科技/电子/贸易… 正则挑选，
 再过滤标题/表头行），跨表按公司名去重。
 
-输出：
-  · 文件/批量输入 → 默认生成 同名_联系方式.xlsx（字段见 EXCEL_COLS）+ 同名_联系方式.json（断点续跑）。
-  · 单家文字输入 → 直接在对话流打印电话/邮箱/法人等，不落表；如需落表可加 --out 路径。
-  · 自定义输出：--out 指定 Excel 路径；--json-out 指定 JSON 明细路径。
+输出格式（--format，默认 excel）：
+  · excel → 仅输出表格 .xlsx（默认）
+  · json  → 仅输出结构化 JSON（列表，含全部字段，便于二次处理/入库）
+  · both  → 两者都输出
+  注：无论选哪种，都会额外生成 <基名>_state.json 作为断点续跑内部状态文件。
+
+单家文字输入 → 仅在对话流打印结果、不落表；加 --out 可指定落盘（同样受 --format 控制）。
+
+命名自定义 —— 占位符会自动替换（--name-format 或 --out 均可使用）：
+  [YYYY-MM-DD] [YYYYMMDD] [YYMMDD] [YYYY] [MM] [DD] [HHMMSS] [TS] [NAME] [COUNT]
+    [NAME]  = 来源文件名(无扩展名)或“搜索结果”
+    [COUNT] = 企业数量
+    其余为日期/时间片段
 
 前置：agent-browser 已安装且用固定 profile 登录过风鸟（登录态会保留在 agent-browser session）。
 """
@@ -39,6 +51,7 @@ import os
 import re
 import urllib.parse
 import sys
+import datetime
 
 DEBUG = True
 
@@ -60,6 +73,40 @@ NAME_HEADERS = ("企业名", "企业名称", "公司名", "公司名称", "名�
 
 # 判定“像公司名”的正则：含这些词且非空，用于挑列 + 过滤标题行
 COMPANY_RE = re.compile(r"(公司|集团|企业|科技|电子|网络|贸易|信息|实业|商贸|股份|有限责任|研究|中心|厂|店|商行|有限)")
+
+
+# 命名模板占位符 → 实际值（目录+基名，不含扩展名）
+_NAME_REPLS = None
+
+
+def render_name(template, ctx=None):
+    """替换命名模板占位符。
+
+    ctx 可选键：now(datetime) / name(来源名) / count(数量)。
+    支持占位符：
+      [YYYY-MM-DD] [YYYYMMDD] [YYMMDD] [YYYY] [MM] [DD] [HHMMSS] [TS]
+      [NAME]  → 来源文件名(无扩展名)或“搜索结果”
+      [COUNT] → 企业数量
+    """
+    ctx = ctx or {}
+    now = ctx.get("now") or datetime.datetime.now()
+    reps = {
+        "[YYYY-MM-DD]": now.strftime("%Y-%m-%d"),
+        "[YYYYMMDD]": now.strftime("%Y%m%d"),
+        "[YYMMDD]": now.strftime("%y%m%d"),
+        "[YYYY]": now.strftime("%Y"),
+        "[MM]": now.strftime("%m"),
+        "[DD]": now.strftime("%d"),
+        "[HHMMSS]": now.strftime("%H%M%S"),
+        "[TS]": now.strftime("%Y%m%d%H%M%S"),
+        "[NAME]": ctx.get("name", "搜索结果"),
+        "[COUNT]": str(ctx.get("count", 0)),
+    }
+    s = template
+    for k, v in reps.items():
+        s = s.replace(k, v)
+    return s
+
 
 
 def _clean_env():
@@ -306,8 +353,16 @@ def _run_single(args, company):
     info = query_one(company)
     print(_format_single(info))
     if args.out:
-        write_excel([info], args.out)
-        print(f"\nExcel: {args.out}")
+        out_path = render_name(args.out, {"now": datetime.datetime.now(),
+                                          "name": company, "count": 1})
+        base = os.path.splitext(out_path)[0]
+        fmt = args.format
+        if fmt in ("excel", "both"):
+            write_excel([info], base + ".xlsx")
+            print(f"\nExcel: {base}.xlsx")
+        if fmt in ("json", "both"):
+            save_results([info], base + ".json")
+            print(f"JSON : {base}.json")
 
 
 def main():
@@ -320,8 +375,13 @@ def main():
     ap.add_argument("out_xlsx", nargs="?", default=None, help="输出 Excel 路径（兼容旧调用；也可用 --out）")
     ap.add_argument("--name", "-n", action="append", metavar="公司名", help="单个公司名，可重复多次（单独/批量搜索）")
     ap.add_argument("--names", "-N", action="append", metavar="公司名", help="同 --name，多个公司名可重复传入")
-    ap.add_argument("--out", "-o", default=None, help="输出 Excel 路径")
-    ap.add_argument("--json-out", default=None, help="输出 JSON 明细路径（默认与 out 同基名 _联系方式.json）")
+    ap.add_argument("--out", "-o", default=None, help="输出路径（Excel/JSON，支持占位符，如 结果_[YYYY-MM-DD].xlsx）")
+    ap.add_argument("--json-out", default=None, help="（兼容）指定 JSON 报告路径，覆盖默认；仅在 --format 含 json 时生效")
+    ap.add_argument("--format", "-F", default="excel", choices=["excel", "json", "both"],
+                    help="输出格式：excel(默认)=仅表格 / json=仅结构化JSON / both=两者都出")
+    ap.add_argument("--name-format", "-f", default=None,
+                    help="自定义输出基名模板（不含扩展名），支持占位符："
+                         "[YYYY-MM-DD][YYYYMMDD][YYMMDD][YYYY][MM][DD][HHMMSS][TS][NAME][COUNT]")
     ap.add_argument("--dry", action="store_true", help="仅抽取/列出公司名，不查风鸟")
     args = ap.parse_args()
 
@@ -376,27 +436,36 @@ def main():
         _run_single(args, cli_names[0][0])
         return
 
-    # 输出路径（批量/文件模式）
-    out_xlsx = args.out or args.out_xlsx
-    if not out_xlsx:
-        if args.companies_file:
-            base = os.path.splitext(args.companies_file)[0]
-        else:
-            base = os.path.join(os.getcwd(), "搜索结果")
-        out_xlsx = base + "_联系方式.xlsx"
-    _base = os.path.splitext(out_xlsx)[0]
-    if _base.endswith("_联系方式"):
-        _base = _base[: -len("_联系方式")]
-    json_file = args.json_out or (_base + "_联系方式.json")
+    # ── 输出命名与格式 ──────────────────────────────────────────
+    now = datetime.datetime.now()
+    src_base = (os.path.splitext(os.path.basename(args.companies_file))[0]
+                if args.companies_file else "搜索结果")
+    ctx = {"now": now, "name": src_base, "count": len(names)}
+
+    # 1) 解析报告基名（不含扩展名）
+    if args.out or args.out_xlsx:
+        base = os.path.splitext(render_name(args.out or args.out_xlsx, ctx))[0]
+    elif args.name_format:
+        base = render_name(args.name_format, ctx)
+    else:
+        base = (os.path.splitext(args.companies_file)[0]
+                if args.companies_file else os.path.join(os.getcwd(), "搜索结果")) + "_联系方式"
+    if base.endswith("_联系方式"):
+        base = base[: -len("_联系方式")]
+
+    # 2) 路径：state 为断点续跑内部文件（始终保留）；report 按 --format 落盘
+    state_file = base + "_state.json"
+    report_xlsx = base + ".xlsx"
+    report_json = args.json_out or (base + ".json")
 
     print("=" * 60)
-    print(f"风鸟查询 | 共 {len(names)} 家企业 | 搜索页直接提取")
+    print(f"风鸟查询 | 共 {len(names)} 家企业 | 格式 {args.format} | 基名 {base}")
     print("=" * 60)
 
     results = []
-    if os.path.exists(json_file):
+    if os.path.exists(state_file):
         try:
-            with open(json_file, "r", encoding="utf-8") as f:
+            with open(state_file, "r", encoding="utf-8") as f:
                 results = json.load(f)
             print(f"📂 已有记录: {len(results)} 条")
         except Exception:
@@ -417,7 +486,7 @@ def main():
                 info = {"company": company, "error": f"异常: {e}"}
             info["source"] = src_map.get(company, "")
             results.append(info)
-            save_results(results, json_file)
+            save_results(results, state_file)
             err = info.get("error", "")
             if err:
                 fail += 1
@@ -434,10 +503,16 @@ def main():
         print(f"\n{'=' * 60}")
         print(f"完成！成功: {success} | 失败: {fail} | 总计: {len(results)}")
 
-    save_results(results, json_file)
-    write_excel(results, out_xlsx)
-    print(f"JSON: {json_file}")
-    print(f"Excel: {out_xlsx}")
+    fmt = args.format
+    if fmt in ("excel", "both"):
+        write_excel(results, report_xlsx)
+        print(f"Excel: {report_xlsx}")
+    if fmt in ("json", "both"):
+        save_results(results, report_json)
+        print(f"JSON : {report_json}")
+    # 内部断点续跑状态始终写入
+    save_results(results, state_file)
+    print(f"状态 : {state_file}（断点续跑用）")
 
 
 if __name__ == "__main__":

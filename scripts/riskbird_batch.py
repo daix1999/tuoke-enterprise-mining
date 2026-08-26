@@ -161,8 +161,9 @@ def query_one(company):
     navigate(search_url)
     time.sleep(6)
     text = get_page_text(10000)
-    if "额度已用完" in text or "达到上限" in text or "去登录" in text:
-        return {"company": company, "error": "NEED_LOGIN"}
+    if "额度已用完" in text or "达到上限" in text or "去登录" in text or "登录/注册" in text:
+        return {"company": company, "error": "NEED_LOGIN",
+                "message": "风鸟未登录或会话已过期，请先用 agent-browser 登录一次（--profile 固定目录），再重跑"}
     info = extract_from_search_results(text, company)
     if info is None:
         return {"company": company, "error": "NOT_FOUND", "_preview": text[:500]}
@@ -321,7 +322,10 @@ def main():
         else:
             base = os.path.join(os.getcwd(), "搜索结果")
         out_xlsx = base + "_联系方式.xlsx"
-    json_file = args.json_out or (os.path.splitext(out_xlsx)[0] + "_联系方式.json")
+    _base = os.path.splitext(out_xlsx)[0]
+    if _base.endswith("_联系方式"):
+        _base = _base[: -len("_联系方式")]
+    json_file = args.json_out or (_base + "_联系方式.json")
 
     if args.dry:
         from collections import Counter

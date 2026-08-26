@@ -76,12 +76,14 @@ def main():
         names_file = os.path.join(raw_dir, "raw", "_pending.json")
         os.makedirs(os.path.dirname(names_file), exist_ok=True)
         json.dump(names, open(names_file, "w", encoding="utf-8"), ensure_ascii=False)
-        result_file = os.path.join(raw_dir, "_补电话结果.json")
-        run([py, BATCH, names_file, result_file], f"步骤2/4 补电话 {len(names)} 家")
+        result_xlsx = os.path.join(raw_dir, "_补电话结果.xlsx")
+        result_json = os.path.join(raw_dir, "_补电话结果_联系方式.json")
+        run([py, BATCH, names_file, "--out", result_xlsx, "--json-out", result_json],
+            f"步骤2/4 补电话 {len(names)} 家")
 
         # 3. 写回电话
         db = sqlite3.connect(args.db)
-        data = json.load(open(result_file, encoding="utf-8"))
+        data = json.load(open(result_json, encoding="utf-8"))
         n_phone = 0
         for x in data:
             if x.get("company") and not x.get("error"):

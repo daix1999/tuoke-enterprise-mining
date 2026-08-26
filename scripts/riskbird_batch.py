@@ -80,7 +80,7 @@ RISKBIRD_PROFILE = os.environ.get(
     os.path.expanduser(r"~\.workbuddy\riskbird-profile"),
 )
 
-EXCEL_COLS = ["序号", "企业名", "注册地点",  "法人", "电话", "邮箱", "规模", "注册资本", "来源表", "经营范围"]
+EXCEL_COLS = ["序号", "企业名", "注册地点",  "法人", "电话", "邮箱", "规模", "注册资本", "公司状态", "来源表", "经营范围"]
 
 NAME_HEADERS = ("企业名", "企业名称", "公司名", "公司名称", "名称", "公司", "企业", "客户", "代理", "商户",
                 "company", "name")
@@ -315,9 +315,10 @@ def write_excel(results, path):
             r.get("address", ""), r.get("legalPerson", ""),
             r.get("phone", ""), r.get("email", ""),
             r.get("staffSize", ""), r.get("capital", ""),
+            r.get("status", ""),
             r.get("source", ""), "",
         ])
-    widths = [6, 40, 30, 16, 18, 28, 10, 16, 18, 20]
+    widths = [6, 40, 30, 16, 18, 28, 10, 16, 10, 18, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     wb.save(path)
@@ -442,6 +443,9 @@ def main():
         ap.print_help()
         sys.exit(1)
 
+    # 统一去重（txt/json 等输入可能含重复公司名，避免重复查询浪费额度）
+    names = list(dict.fromkeys(names))
+
     if not names:
         print("⚠️ 未解析到任何企业名（请检查文件表头/格式，或用 --name 直接输入）")
         sys.exit(1)
@@ -496,7 +500,14 @@ def main():
         except Exception:
             pass
 
-    done = set(r.get("company", "") for r in results if r.get("company") and not r.get("error"))
+    def _retryable(err):
+        """错误是否需重查：环境类(登录/额度/异常)重查；确定结果(NOT_FOUND)跳过不重查。"""
+        if not err:
+            return False
+        return ("NEED_LOGIN" in err or "QUOTA" in err or err.startswith("异常"))
+
+    done = set(r.get("company", "") for r in results
+               if r.get("company") and not _retryable(r.get("error", "")))
     todo = [n for n in names if n not in done]
     print(f"✅ 已完成: {len(done)} | ⏳ 待查询: {len(todo)}\n")
 
@@ -510,6 +521,8 @@ def main():
             except Exception as e:
                 info = {"company": company, "error": f"异常: {e}"}
             info["source"] = src_map.get(company, "")
+            # 按公司名替换旧记录（含错误记录），避免断点续跑重复膨胀
+            results = [r for r in results if r.get("company") != company]
             results.append(info)
             save_results(results, state_file)
             err = info.get("error", "")

@@ -14,17 +14,20 @@
     python riskbird_batch.py 名单.xlsx --out 结果.xlsx
     python riskbird_batch.py 名单.xlsx --dry           # 仅抽取公司名，不查风鸟（校验用）
 
-  # 直接文字输入公司名（单独搜索 / 批量搜索，无需准备文件）
-    python riskbird_batch.py --name "北京博维伟业有限公司"                   # 单家搜索
-    python riskbird_batch.py --name "A公司" --name "B公司" --name "C公司"   # 批量搜索（可重复 --name）
+  # 直接文字输入公司名（无需准备文件）
+  #  · 单家：直接在对话流打印结果，不生成表格
+  #  · 批量：--name/--names 传多个，自动输出 Excel 表格
+    python riskbird_batch.py --name "北京博维伟业有限公司"                   # 单家搜索（对话流告知）
+    python riskbird_batch.py --name "A公司" --name "B公司" --name "C公司"   # 批量搜索（输出表格）
     python riskbird_batch.py --names "A公司" --names "B公司"                # 同上，等价写法
-    python riskbird_batch.py --name "A公司" --out 结果.xlsx                 # 指定输出路径
 
 Excel 多表处理：逐个工作表自动识别“公司名”列（按含 公司/科技/电子/贸易… 正则挑选，
 再过滤标题/表头行），跨表按公司名去重。
 
-输出：默认生成 同名_联系方式.xlsx（字段见 EXCEL_COLS）+ 同名_联系方式.json（便于断点续跑）。
-直接文字输入时默认输出 搜索结果_联系方式.xlsx/json（可用 --out / --json-out 指定）。
+输出：
+  · 文件/批量输入 → 默认生成 同名_联系方式.xlsx（字段见 EXCEL_COLS）+ 同名_联系方式.json（断点续跑）。
+  · 单家文字输入 → 直接在对话流打印电话/邮箱/法人等，不落表；如需落表可加 --out 路径。
+  · 自定义输出：--out 指定 Excel 路径；--json-out 指定 JSON 明细路径。
 
 前置：agent-browser 已安装且用固定 profile 登录过风鸟（登录态会保留在 agent-browser session）。
 """
@@ -265,6 +268,48 @@ def save_results(results, path):
         json.dump(results, f, ensure_ascii=False, indent=2)
 
 
+def _format_single(info):
+    """单家查询结果格式化为对话流文本（无表格）。"""
+    if info.get("error"):
+        err = info.get("error")
+        if err == "NEED_LOGIN":
+            msg = info.get("message") or "风鸟未登录或会话已过期"
+            tip = "\n请先用 agent-browser 以固定 profile 登录风鸟后再重跑。"
+        elif err == "NOT_FOUND":
+            msg = "风鸟未匹配到该企业"
+            tip = "\n请确认公司名是否准确（需与工商全称一致）。"
+        else:
+            msg = info.get("message") or err
+            tip = ""
+        return f"⛔ 查询失败：{info.get('company','')}\n原因：{msg}{tip}"
+    lines = [
+        "📋 查询结果：" + info.get("company", ""),
+        "─" * 48,
+        f"  电话：{info.get('phone') or '—'}",
+        f"  邮箱：{info.get('email') or '—'}",
+        f"  法人：{info.get('legalPerson') or '—'}",
+        f"  注册资本：{info.get('capital') or '—'}",
+        f"  成立日期：{info.get('establishDate') or '—'}",
+        f"  经营状态：{info.get('status') or '—'}",
+        f"  统一信用代码：{info.get('creditCode') or '—'}",
+        f"  地址：{info.get('address') or '—'}",
+        "─" * 48,
+    ]
+    if not info.get("phone") and not info.get("email"):
+        lines.append("⚠️ 未提取到电话/邮箱（页面未展示或企业未公开）")
+    return "\n".join(lines)
+
+
+def _run_single(args, company):
+    """单家公司名查询：直接打印到对话流，不强制落表（--out 显式指定时额外落地）。"""
+    print(f"🔍 查询中：{company}\n")
+    info = query_one(company)
+    print(_format_single(info))
+    if args.out:
+        write_excel([info], args.out)
+        print(f"\nExcel: {args.out}")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="风鸟批量/单查企业联系方式（支持文件、单名、多名）",
@@ -314,7 +359,24 @@ def main():
         print("⚠️ 未解析到任何企业名（请检查文件表头/格式，或用 --name 直接输入）")
         sys.exit(1)
 
-    # 输出路径
+    # dry 离线校验（无论单家/批量都先处理，不查风鸟）
+    if args.dry:
+        from collections import Counter
+        print(f"🔍 离线抽取（不查风鸟）共 {len(names)} 家公司：")
+        cnt = Counter(src_map.get(n, "?") for n in names)
+        for src, c in cnt.items():
+            print(f"  - {src}: {c} 家")
+        for n in names[:20]:
+            print("   ", n)
+        print(f"   ...（共 {len(names)} 家）")
+        return
+
+    # 单家文字查询：直接在对话流告知结果，不生成表格
+    if len(cli_names) == 1 and not args.companies_file:
+        _run_single(args, cli_names[0][0])
+        return
+
+    # 输出路径（批量/文件模式）
     out_xlsx = args.out or args.out_xlsx
     if not out_xlsx:
         if args.companies_file:
@@ -326,17 +388,6 @@ def main():
     if _base.endswith("_联系方式"):
         _base = _base[: -len("_联系方式")]
     json_file = args.json_out or (_base + "_联系方式.json")
-
-    if args.dry:
-        from collections import Counter
-        print(f"🔍 离线抽取（不查风鸟）共 {len(names)} 家公司：")
-        cnt = Counter(src_map.get(n, "?") for n in names)
-        for src, c in cnt.items():
-            print(f"  - {src}: {c} 家")
-        for n in names[:20]:
-            print("   ", n)
-        print(f"   ...（共 {len(names)} 家）")
-        return
 
     print("=" * 60)
     print(f"风鸟查询 | 共 {len(names)} 家企业 | 搜索页直接提取")

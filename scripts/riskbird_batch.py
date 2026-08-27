@@ -219,20 +219,36 @@ def extract_from_search_results(text, company_name):
     return info
 
 
-def query_one(company):
+def query_one(company, max_retry=2):
+    """单家查询（网络波动自动重试）。NEED_LOGIN/额度问题不重试；页面未提取到结果重试。"""
     encoded = urllib.parse.quote(company)
-    search_url = f"https://www.riskbird.com/search/company?keyword={encoded}&_t={int(time.time() * 1000)}"
-    navigate(search_url)
-    time.sleep(6)
-    text = get_page_text(10000)
-    if "额度已用完" in text or "达到上限" in text or "去登录" in text or "登录/注册" in text:
-        return {"company": company, "error": "NEED_LOGIN",
-                "message": "风鸟未登录或会话已过期，请先用 agent-browser 登录一次（--profile 固定目录），再重跑"}
-    info = extract_from_search_results(text, company)
-    if info is None:
-        return {"company": company, "error": "NOT_FOUND", "_preview": text[:500]}
-    info["query_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    return info
+    for attempt in range(max_retry + 1):
+        search_url = f"https://www.riskbird.com/search/company?keyword={encoded}&_t={int(time.time() * 1000)}"
+        try:
+            navigate(search_url)
+            time.sleep(6)
+            text = get_page_text(10000)
+        except Exception as e:
+            if attempt < max_retry:
+                print(f"  ⚠️ 网络异常，自动重试 {attempt+1}/{max_retry}…")
+                time.sleep(3)
+                continue
+            return {"company": company, "error": f"网络异常: {e}",
+                    "message": "查询时网络请求失败（可能是网络波动或代理问题），请稍后重跑该条"}
+        if "额度已用完" in text or "达到上限" in text or "去登录" in text or "登录/注册" in text:
+            return {"company": company, "error": "NEED_LOGIN",
+                    "message": "风鸟未登录或会话已过期：请先用 agent-browser 打开风鸟登录一次（--profile 固定目录），再重跑；或到 https://www.riskbird.com 手动登录后刷新脚本登录态"}
+        info = extract_from_search_results(text, company)
+        if info is not None:
+            info["query_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            return info
+        if attempt < max_retry:
+            print(f"  ⚠️ 页面未提取到该企业，自动重试 {attempt+1}/{max_retry}…")
+            time.sleep(3)
+            continue
+    return {"company": company, "error": "NOT_FOUND",
+            "message": "风鸟未匹配到该企业：①请核对公司名是否与工商登记全称一致；②该企业可能已更名/查无登记；③若网络波动，已自动重试仍无结果可稍后重跑",
+            "_preview": text[:500]}
 
 
 def _looks_like_company(s):
